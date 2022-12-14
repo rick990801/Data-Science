@@ -1,0 +1,157 @@
+---
+title: "Stats 369 A4"
+author: "Richard Choi"
+date: "09/10/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Question 1
+Build a classifier to predict labels r from x with xgboost, and show the confusion matrix
+(You will need to specify the objective function for multi-class prediction, and you will need to remove observations with missing label)
+```{r}
+library(xgboost)
+load("yrbs.rda")
+summary(x)
+summary(r)
+dim(x)
+dim(r)
+
+# predictors
+x = x[!is.na(r),]
+
+# label
+r = r[!is.na(r)]
+
+x = apply(x, 2, as.numeric)
+x = as.matrix(x)
+
+set.seed(369)
+xgb.cv(data=x, label=r, num_class=8, nrounds=30, nfold=5, objective="multi:softmax", metrics="merror")
+model = xgboost(data=x, label=r, num_class=8, nrounds=12, nfold=5, objective="multi:softmax")
+pred = predict(model, x)
+
+confMat = table(prediction=pred, true=r)
+confMat
+sum(diag(confMat))/sum(confMat)
+```
+There doesn't seem to be a significant drop after round 12 so let's use round 12.
+The accuracy produced by cross validated xgboost seems to be 65.61% which isn't all that great.
+
+# Question 2
+Describe and visualise which variables are most important in the prediction.
+```{r}
+importance = xgb.importance(model=model)
+importance[which.max(importance$Gain)]
+importance[which.max(importance$Cover)]
+importance[which.max(importance$Frequency)]
+head(importance)
+
+```
+Gain: The average loss reduction gained when using a predictor in a split.
+
+Cover: The number of times a predictor is used as split; weighted by the number of observations that go through the split.
+
+Frequency: The number of times a predictor is used as a (tree) split (across all trees in ensemble method).
+
+Using Gain, Cover, and Frequency it seems that the results are not consistent. Frequency metric shows the predictor q7 to be the most important as it has the highest number of times a predictor is used as a split with 6.27%. However, both gain (15.22%) and cover (7.59%) shows that q97 to be the most important predictor as it has the highest value. This means that q97 reduces the multi class error in a split the most and most used predictor weighted by the number of observations that go through the split. 
+
+Therefore, we should try using SHAP to make consistent result.
+
+```{r}
+xgb.plot.shap(model=model, data=as.matrix(x),top_n=3)
+xgb.plot.shap.summary(model=model, data=as.matrix(x), top_n=3)
+
+```
+Q97: During the past 12 months, how many times have you had a sunburn? 
+It looks like for this question SHAP value seems to increase as there are more times the high school student had a sunburn.
+Q9: How often do you wear a seat belt when riding in a car driven by someone else?
+The SHAP value seems to decrease as the frequency of high school student wearing seat belt when riding in a car driven by someone else.
+Q6: How tall are you without your shoes on?
+The SHAP value seems to show bi modal relationship in an increasing trend. The SHAP value seems to drop around 1.7 unit peak around 2.0 unit
+
+
+Using the SHAP values, we have identified Q97, Q9, and Q6 to be the most important predictors as well.
+By SHAP value, Q97 is the most important then Q6, and Q9 is ranked last.
+# Question 3
+Describe and display the relationships between the most important variables and the label categories – which category/categories is each of the most important variables useful for predicting? 
+Can you produce a summary of the most distinctive predictors for each label category?
+
+```{r}
+library(dplyr)
+library(ggplot2)
+full.df = cbind(as.data.frame(x), r)
+full.df  = full.df %>%
+  mutate(race = factor(r, labels=c("Am Indian / Alaska Native", "Asian", "Black or African American", "Native Hawaiian/other Pacific Islander", "White", "Hispanic/Latino", "Multiple Race - Hispanic", "Multiple Race - Non-Hispanic"))) %>%
+  select(-r)
+
+full.df %>%
+  group_by(race) %>%
+  summarise(n())
+```
+Before we find relationships between variables and label categories let's have a look at the proportion of race in the data.
+We notice that White, Multiple Race - Hispanic, and Hispanic/Latino are the majority of the race so we will keep that in mind.
+```{r}
+full.df %>%
+  ggplot(aes(x=q97)) + facet_wrap(~race) + geom_bar()
+
+```
+We observe that the White people are most prune to sun-burnt followed by people with multiple Hispanic race. Whereas other race like American Indian, Asian, Black, Pacific Islanders are much less prune to sunburn. Based on the plot, there are no Hawaiian/Pacific Islanders who got sunburn. Hispanic and Multiple Race - Hispanic people showed similar distribution so the predictor was not applicable. Therefore, Q97 excels at determining White people and Hawaiian/Pacific Islanders.
+
+```{r}
+full.df %>%
+  ggplot(aes(x=q9)) + facet_wrap(~race, scales="free") + geom_bar()
+
+```
+By proportion it looks like majority of people regardless of their race always wear their seat belt. We can see that people with black race tend to wear 'most of the time' particularly out of all the races. 
+Q9 is a useful predictor to determine people with black race.
+
+```{r}
+full.df %>%
+  ggplot(aes(x=q6)) + facet_wrap(~race, scales="free") + geom_bar()
+
+```
+Again by proportion, it looks like regardless of race the height of high school students without shoes on are normally distributed. We notice only people with Hawaiian/Other Pacific Islander's height without shoes on drop sharply after 1.8m.
+Q6 excels at determining people with Hawaiian/Pacific Islander background. 
+
+
+```{r}
+full.df %>%
+  ggplot(aes(x=q8)) + facet_wrap(~race, scales="free") + geom_bar()
+
+```
+Question 8: When you rode a bicycle during the past 12 months, how often did you wear a helmet?
+
+Again by proportion, it looks like majority of people do not wear a helmet when riding a bicycle. We notice only Asian people in majority do not ride bicycle. 
+Using the data, Q8 excels at determining people with Asian race.
+
+```{r}
+full.df %>%
+  ggplot(aes(x=q7)) + facet_wrap(~race, scales="free") + geom_bar()
+
+full.df %>%
+  group_by(race) %>%
+  summarise(average = mean(q7, na.rm=TRUE))
+```
+Question 7 is "How much do you weigh without your shoes on? (Note: Data are in kilograms."
+It looks like Asians have the least weight and Pacific Islander have the highest weight on average. 
+Question 7 is an okay predictor to determine Asians and Pacific Islander.
+However, it needs to take into an account where mean was used so extreme values and different number of race may influence mean values.
+
+In summary, Q97 is good at determining White and Hawaiian/Pacific Islander, Q7 is good at determining Asian and Hawaiian/Pacific Islander, Q8 is good at determining Asian, Q6 is good at determining Hawaiian/Pacific Islander, and Q9 is good at determining black people. Hispanic and multiple race - Hispanic always showed similar distribution so  predictors could not be used to determine them. This is perhaps because people with multiple background including Hispanic may share similar culture with people with sole Hispanic background. However, this is only assumption and further researches should be conducted. 
+
+There wasn't any distinctive predictor for people with Multiple race without Hispanic background. This could be due to their race's nature. People with White + Asian background and people with Black + Indian American will all be labelled as multiple race without Hispanic background so all their unique characteristic will be jumbled up. Therefore, it is difficult for the predictors to distinguish this label between other races. 
+
+Furthermore, people with Am Indian/Alaska Native were one of the minority of race in this data set so it was hard to find any distinctive distribution using the predictors.
+
+Finally as Gain, Cover, and SHAP value recommended, q97 is the best predictor as it distinctively determine people with white race and Hawaiian.
+
+
+# Question 4
+Comment on whether (or not) task 3 would be ethically problematic if intended to be published, and for what reasons.
+
+It would be a ethically problematic as the predictors we picked are based on a model with a very poor accuracy. The accuracy is only 64.19% which is very low. Moreover, the task involves using race's characteristic or activities which may reinforce stereotypes. For example, we found that people with white background will have a high chance of sunburn and people with Pacific background tend to be overweight. 
+Publicising could therefore be a problem in a wider society. For instance, using this information the insurance companies may impose higher premium to people with black ground for not wearing seat belts or may cause racial hate using these difference in racial characteristics.
+
+
