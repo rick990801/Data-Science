@@ -1,0 +1,71 @@
+---
+title: "Stats 369 A3"
+author: "Richard Choi"
+date: "20/09/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+1. Use rpart to fit and prune a tree predicting spam/non-spam from the common word counts in the wordmatrix matrix. Produce a confusion matrix and report its accuracy. Plot the fitted tree (without all the text labels) and comment on its shape.
+```{r}
+set.seed(369)
+library(rpart)
+load("spam.rda")
+df2 = data.frame(is_spam=factor(df[,2]), wordmatrix)
+spam_tree = rpart(is_spam~., data=df2)
+plotcp(spam_tree)
+printcp(spam_tree)
+spam_tree2 = prune(spam_tree, cp=0.01)
+plot(spam_tree2)
+spam_tree2
+predict1 <-  predict(spam_tree2, type = "class")
+confMatrix = table(Actual = df$is_spam, Predicted = predict1)
+confMatrix
+sum(diag(confMatrix)) / sum(confMatrix)
+```
+The tree seems to be branching off in the left direction and there is 16 leaf nodes. The tree goes on one direction. It could be due to there are more words to classify whether the message is spam in comparison to words to classify whether the message is ham. 
+
+We have chosen to prune the tree with 0.01 penalty as it gave the lowest cross validation error. Using the 1 standard error rule also gave us the same result. There are a total of 16 leaf nodes in the pruned tree. 
+
+2. Build a Naive Bayes classifer. For each common word in wordmatrix, compute the number yi and ni, which respectively gives the counts of spam and non-spam messages. Then an overall evidence provided by having this word in a message can be approximated by
+
+ei=log(yi+1)−log(ni+1).
+
+A Naive Bayes classifier then sums up the ei for every common word in the message to get an overall score for each message. It then splits this at some threshold to get a classification. (FYI -- it is called naive Bayes because it would be a Bayesian predictor if the words were all independently chosen, which they obviously won't be in this case).
+
+Construct a naive Bayes classifiers and choose the threshold so that the proportion of spam predicted is the same as the proportion observed. Produce a confusion matrix and report its accuracy.
+```{r}
+spam = df2[which(df2$is_spam==TRUE), -1]
+yi = apply(spam, 2, sum)
+
+notSpam = df2[which(df2$is_spam==FALSE), -1]
+ni = apply(notSpam, 2, sum)
+ei = log(yi + 1) - log(ni + 1)
+score = wordmatrix %*% ei
+
+# threshold
+
+df3 = data.frame(df$is_spam, score, wordmatrix)
+
+# sort the score in ascending order and messages with over the threshold is classified as spam
+n = sum(df2$is_spam==FALSE)
+spamThr = sort(score)[n]
+spamThr
+
+sum(df3$score > spamThr)/nrow(df3)
+predict2 <- predict(spam_tree2, type = "class")
+# if the score is higher than the threshold then it's a spam message
+confMatrix1 = table(Actual = df$is_spam, Predicted = df3$score > spamThr)
+confMatrix1
+sum(diag(confMatrix1)) / sum(confMatrix1)
+```
+The accuracy rate is 88.05% which is  lower than the 96% accuracy rate from the fitted tree. We can also note that true false is much higher than true positive which indicates that the naive Bayesian classifier is better at finding ham message than spam message. 
+
+3. Thoroughly read the description at the UCI archive of how the dataset was constructed. Is the spam/non-spam accuracy likely to be higher with this dataset than in real life? Why or why not? What can you say about the generalisability of the classifier to particular populations of text users?
+
+The spam messages were collected from a UK website where the cell phone users make public claims about SMS spam messages where most of them didn't report the very spam message received. This means that there is a chance of self selection bias as the internet users didn't report with a spam message they received. This may result in phone users showing more 'extreme' level of spam messages where it's easier to distinguish than the generic spam messages. 
+
+Ham messages were extracted from university students in Singapore and Caroline Tag's PHD Thesis; most of ham messages were from Singaporean students. This results in spam messages and ham messages to be extracted from 2 different group. Although one of the official languages in Singapore is English, there tends to be difference in Singaporean English grammar and UK English grammar. Also, the ham messages will have different topic due to interest and student nature of the phone users in comparison to UK phone users. 
+
+The accuracy of the model might be much higher than using a real data set because the model was constructed using the data set from specific group such as UK phone users and Singaporean University students. The model was not built using general population e.g particular country. As discussed above, the difference in grammar, topic discussed between spam and ham messages drastically different. Unless the model was used to predict Singapore and UK ham/spam messages, it will have a much lower classficiation rate. 
