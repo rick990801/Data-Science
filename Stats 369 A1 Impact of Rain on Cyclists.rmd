@@ -1,0 +1,136 @@
+---
+title: "Stats 369 A1"
+author: "Richard Choi"
+date: "23 July 2021"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+```{r}
+# Question 1
+# If you try to convert the cycle count data to tidy format (which you don’t have to do for this assignment, because it’s hard), what is one obstacle you will encounter?
+
+
+```
+When you try to convert the cycle count data to tidy format it would be computationally inefficient. It would take lot of time to convert it to the tidy format. Also, lot of the names are actually the same place but they are inconsistent. It is really difficult to cover all the patterns so we would need to change the name manually. 
+
+```{r}
+# Question 2
+# Compute the total number of cyclists counted for each day, and a suitable summary of the rainfall for each day, in the same data frame.
+bike_files<- list.files("/cloud/project/Data",pattern=".csv",full=TRUE)
+bike_data<-map(bike_files,read_csv)
+
+rain_data <- list.files("/cloud/project/Data",pattern="txt",full=TRUE) %>%
+  map(~ read_csv(., skip=9))
+
+# function for removing columns with na
+notallNA<-function(x) !all(is.na(x))
+
+bike_data <- map(bike_data, select_if, notallNA)
+rain_data <- map(rain_data, select_if, notallNA)
+
+bike_data <- bind_rows(bike_data)
+rain_data <- bind_rows(rain_data)
+
+# adding separator in the date 
+bike_data = bike_data %>%
+  mutate(Format_Date = as.Date(bike_data$Date, format="%a %d %b %Y"))
+
+cyclist_amount = bike_data %>% 
+  rowwise(Format_Date) %>%
+  summarise(total_cyclist = sum(c_across(where(is.numeric)), na.rm=TRUE))
+
+lct <- Sys.getlocale("LC_TIME"); Sys.setlocale("LC_TIME", "C")
+# adding separator in the date
+rain_data = rain_data %>% 
+  mutate(Format_Date = as.Date(as.character(rain_data$`Date(NZST)`), "%Y%m%d"))
+
+rain_amount = rain_data %>%
+  group_by(Format_Date = Format_Date) %>%
+  summarise(Amount = sum(`Amount(mm)`)) 
+
+both = inner_join(cyclist_amount, rain_amount, by="Format_Date")
+both
+```
+
+
+```{r}
+# Question 3
+# Draw suitable graphs to display how the number of cyclists varies over time, over season, over day of the week, and with rain
+
+all_data = both %>%
+  mutate(weekday = weekdays(Format_Date)) %>%
+  mutate(weekday = factor(weekday, levels = 
+           c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) %>%
+  separate(Format_Date, into=c("year", "month", "day"), sep="-")  %>%
+  mutate(season = case_when(month=="09" | month=="10" | month=="11" ~ "Spring",
+                            month=="12" | month=="01" | month=="02" ~ "Summer",
+                            month=="03" | month=="04" | month=="05" ~ "Autumn",
+                            month=="06" | month=="07" | month=="08" ~ "Winter")) %>%
+  mutate(season = factor(season, levels = c("Spring", "Summer", "Autumn", "Winter")))
+
+# time    
+time.df = all_data %>%
+  filter(!is.na(year))
+
+ggplot(aes(year, total_cyclist), data=time.df) + geom_boxplot() + 
+  ggtitle("Number of cyclists over the years")
+
+```
+For the number of cyclists over the years I have plotted box plot. We can see the median of total cyclists is gradually increasing over the years. The range of the boxplots are also increasing. This could mean that there are more people cycling and it's getting popular. 
+```{r}
+# season
+season.df = all_data %>% 
+  filter(!is.na(year))
+  
+ggplot(aes(season, total_cyclist), data=season.df) + geom_boxplot() + 
+  ggtitle("Number of cyclists over the seasons")
+
+```
+For the number of cyclists over the seasons, I have also plotted box plots. We can observe that there are highest number of cyclists in summer and the lowest number of cyclists in winter. 
+```{r}
+#day of week
+day.df = all_data %>%
+  filter(!is.na(year))
+
+ggplot(aes(weekday, total_cyclist), data=day.df) + geom_boxplot() + 
+  ggtitle("Number of cyclists over the days of week")
+
+
+```
+We can see that the median of cyclists in the weekday higher than the median of cyclists in the weekends.
+
+```{r}
+
+#rain
+rain.df = all_data %>%
+  filter(!is.na(year)) 
+  
+ggplot(aes(Amount, total_cyclist), data=rain.df) + geom_point() +  geom_smooth() +
+  ggtitle("Number of cyclists with the amount of rain(mm)")
+
+```
+We can see a decreasing trend between rain and cyclists. The number of cyclists decrease significantly as the rain amount increases. 
+
+```{r}
+# Question 4
+# Fit a regression model to predict the number of cyclists from year, season, day of the week, and rain.
+library(s20x)
+cyclist.glm = lm(total_cyclist ~ year + season + weekday + Amount, data = all_data)
+summary(cyclist.glm)
+plot(cyclist.glm, which=1)
+normcheck(cyclist.glm, shapiro.wilk=TRUE)
+cooks20x(cyclist.glm)
+
+confint(cyclist.glm)
+```
+We have fitted a simple linear model with year, season, weekdays, and rain amount. 
+All the variables are statistically significant (p - value less than 0.05). The residual plot shows a slight upwards trend around the low end of fitted values. However, most of the residuals are pattern less and shows constant scatter after 5000 fitted values. The normality is ok and the cook's plot is also fine. 
+The R squared is 60.78% which isn't great for prediction. 
+
+# Question 5
+# Based on your graphs and model, does rain have a big impact on the number of people cycling in Auckland?
+Both the graph and model indicates that the rain has a big impact on the number of people cycling in Auckland. The graph shows a decreasing trend between rain amount and total cyclists. 
+Likewise, from the model, we estimate that every millilitre increase in rain amount is associated with a decrease in the mean of cyclists of between 107 and 123 people. The rain term in the model is -115 and the p - value is 2e-16 which shows statistically significant. 
