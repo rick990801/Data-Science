@@ -1,0 +1,316 @@
+---
+title: "Assignment 2"
+author: "Richard Choi"
+date: "20 August 2021"
+output: html_document
+---
+Using the data from week 2 of January 2016, construct a model that predicts the amount of a tip.  Evaluate the mean squared error of this model on the data from week 4 of January 2016.  Write a report that describes how you constructed the model and how accurate it is. 
+
+Submit the rmd and the knitted pdf or html.
+
+Notes: 
+
+1. The data sets are fairly large. Each one has a couple of million records. You should still be able to run `regsubsets` and `lm` fairly quickly.
+
+2. As the data dictionary indicates, tip information is not available for all trips
+
+3. These data have not been cleaned; they are as they came from the data provider.
+
+4. You will want to recode variables such as pickup and dropoff time and location into categories: they will not have linear relationships with tip amount. Some graphical exploration is likely to be helpful in addition to thinking about the problem.  If you have problems drawing graphs because of the size of the data, taking  a random subsample of, say, 10% of it can be useful. 
+
+5. The `total_amount` variable is the total amount paid. It includes the tip, and so can't be used to predict the tip.
+```{r}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+week2.df = read_csv("week2.csv")
+week4.df = read_csv("week4.csv")
+```
+
+```{r}
+# Inspecting data
+
+summary(week2.df)
+sum(week2.df$fare_amount < 0)
+unique(week2.df$RatecodeID)
+unique(week2.df$payment_type)
+unique(week2.df$store_and_fwd_flag)
+sum(week2.df$extra < 0)
+
+any(is.na(week2.df))
+
+week2.df %>%
+  ggplot(aes(x=pickup_longitude)) + geom_histogram()
+
+week2.df %>%
+  ggplot(aes(x=pickup_latitude)) + geom_histogram()
+
+week2.df %>%
+  ggplot(aes(x=dropoff_longitude)) + geom_histogram()
+
+week2.df %>%
+  ggplot(aes(x=dropoff_latitude)) + geom_histogram()
+
+```
+We notice our data needs some cleaning as some values shouldn't be negative and variables like ratecodeID are categorised by 1 to 6 yet it's out of range. 
+```{r}
+# Cleaning data
+week2.tidy = week2.df %>% 
+  filter(trip_distance >0) %>%
+  filter(RatecodeID <= 6) %>%
+  filter(fare_amount >0) %>%
+  filter(extra >=0) %>%
+  filter(mta_tax >=0) %>%
+  filter(tip_amount>=0) %>%
+  filter(improvement_surcharge>=0) %>%
+  filter(total_amount > 0) %>%
+  filter(passenger_count >0 & passenger_count <=4) %>%
+  filter(between(pickup_longitude, -75, -70)) %>%
+  filter(between(pickup_latitude, 40, 42)) %>%
+  mutate(time = case_when(hour(tpep_pickup_datetime) >= 0 & hour(tpep_pickup_datetime) <= 5 ~ "Early Morning",
+                          hour(tpep_pickup_datetime) >= 6 & hour(tpep_pickup_datetime) <= 11 ~ "Morning",
+                          hour(tpep_pickup_datetime) >= 12 & hour(tpep_pickup_datetime) <= 17 ~ "Afternoon",
+                          hour(tpep_pickup_datetime) >= 18 & hour(tpep_pickup_datetime) <= 23 ~ "Evening")) %>%
+  mutate(pickup_location = case_when(between(pickup_latitude, 40.7, 40.88) & between(pickup_longitude, -74, -73.91) ~ "Manhattan",
+                              between(pickup_latitude, 40.57, 40.7378) & between(pickup_longitude, -74.039, -73.858) ~ "Brooklyn",
+                              between(pickup_latitude, 40.63, 40.739) & between(pickup_longitude, -73.96, -73.7) ~ "Queen",
+                              TRUE~"Other")) %>%
+  mutate(dropoff_location = case_when(between(dropoff_latitude, 40.7, 40.88) & between(dropoff_longitude, -74, -73.91)~ "Manhattan",
+                              between(dropoff_latitude, 40.57, 40.7378) & between(dropoff_longitude, -74.039, -73.858) ~ "Brooklyn",
+                              between(dropoff_latitude, 40.63, 40.739) & between(dropoff_longitude, -73.96, -73.7) ~ "Queen",
+                              TRUE~"Other")) %>%
+  mutate(pickup_dow = factor(weekdays(tpep_pickup_datetime), levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) %>%
+  mutate(payment_type = fct_recode(factor(payment_type), "Credit card" = "1", "cash" = "2", "No charge" = "3", "Dispute" = "4", "Unknown" = "5", "Voided trip" = "6")) %>%
+  mutate(RatecodeID = fct_recode(factor(RatecodeID), "Standard rate" = "1", "JFK" = "2", "Newark" = "3", "Nassau or Westchester" = "4", "Negotiated fare" = "5", "Group ride" = "6")) %>%
+  mutate(pickupday_type = case_when(pickup_dow %in% c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday") ~ "Working day",
+                             pickup_dow %in% c("Saturday", "Sunday") ~ "Weekend")) %>%
+  select(tip_amount, passenger_count, trip_distance, RatecodeID, payment_type, fare_amount, extra, tolls_amount, total_amount, time, pickup_location, dropoff_location, pickup_dow, pickupday_type)
+  
+```
+I have decided to categorise time to (working day & weekend), (evening & early morning), factored payment type and ratecodeID to categories. Using pickup latitude and pickup longitude, the location was categorised to main boroughs in the New York City which are Manhattan, Queens, Brooklyn, and Other. Lot of tax drives should be airport trips so I have used the main boroughs.
+I have also dropped variables like VendorID, mta_tax, improvement surcharge, store and fwd flag as they had no relation to tips or other variables have covered their presence. For example, tip should not vary depending on the type of TPEP provider or trip distance or fare amount should account for MTA tax so MTA tax would have a small impact on tips with other variables prescenece. On the other hand, tpep pickup date time, tpep drop off date time were used to create categories of time like earlymorning and evening. The pickup longitude and latitude, were used to estimate the location of the main boroughs in the New York city.
+```{r}
+# data exploration
+
+week2.tidy %>%
+  group_by(pickup_location) %>%
+  summarise(n())
+
+week2.tidy %>%
+  group_by(RatecodeID) %>%
+  summarise(n())
+
+week2.tidy %>%
+  group_by(passenger_count) %>%
+  summarise(n())
+
+week2.tidy %>%
+  group_by(trip_distance, pickupday_type) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+    ggplot(aes(x=trip_distance, y=mean_tip)) + geom_point(alpha=0.1) + xlim(0,100) + ylim(0, 150) + facet_wrap(~pickupday_type)
+
+week2.tidy %>%
+  group_by(pickup_dow) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=pickup_dow, y=mean_tip)) + geom_bar(stat='identity')
+
+week2.tidy %>%
+  group_by(pickupday_type) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=pickupday_type, y=mean_tip)) + geom_bar(stat='identity')
+
+week2.tidy %>% 
+  group_by(passenger_count) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=passenger_count, y=mean_tip)) + geom_bar(stat='identity')
+
+week2.tidy %>% 
+  group_by(total_amount) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=total_amount, y=mean_tip)) + geom_point(alpha=0.1) + xlim(0,500) + ylim(0, 200)
+
+week2.tidy %>%
+  group_by(time) %>%
+  summarise(mean_extra = mean(extra)) %>%
+  ggplot(aes(x=mean_extra, y=time)) + geom_bar(stat='identity')
+
+week2.tidy %>%
+  group_by(dropoff_location) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=mean_tip, y=dropoff_location)) + geom_bar(stat='identity')
+
+week2.tidy %>%
+  group_by(pickup_location) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=mean_tip, y=pickup_location)) + geom_bar(stat='identity')
+
+week2.tidy %>%
+  group_by(pickup_location, pickupday_type) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=mean_tip, y=pickup_location)) + geom_bar(stat='identity') + facet_wrap(~pickupday_type)
+
+week2.tidy %>%
+  group_by(pickup_location, RatecodeID) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=mean_tip, y=pickup_location)) + geom_bar(stat='identity') + facet_wrap(~RatecodeID)
+
+week2.tidy %>%
+  group_by(pickupday_type, RatecodeID) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+  ggplot(aes(x=mean_tip, y=pickupday_type)) + geom_bar(stat='identity') + facet_wrap(~RatecodeID)
+
+week2.tidy %>% 
+  filter(payment_type %in% c('Credit card','cash')) %>%  
+  group_by(pickup_dow,payment_type) %>%  
+  summarise(n = n()) %>% 
+  mutate(sum = sum(n), prop = n/sum) %>% 
+  ggplot(aes(x=pickup_dow, y=prop,color=payment_type, group=payment_type)) + geom_point() + geom_line(linetype='dotted')
+
+week2.tidy %>% 
+  group_by(payment_type) %>%
+  summarise(mean_tip = mean(tip_amount)) %>%
+    ggplot(aes(x=payment_type, y=mean_tip)) + geom_bar(stat='identity')
+
+week2.tidy %>%
+  group_by(time, pickupday_type) %>%
+  summarise(mean_tip=mean(tip_amount)) %>%
+  ggplot(aes(x=time, y=mean_tip)) + geom_bar(stat='identity') + facet_wrap(~pickupday_type)
+
+# remove more variables 
+week2.tidy = week2.tidy %>%
+  select(-tolls_amount, -dropoff_location, -pickup_dow, -payment_type, -total_amount)
+```
+We have fitted some graphs to explore the data and we found some interesting points. We can observe that there is higher average tips in the weekdays than weekends. From the scatter plots, we can see there is an increase in scatter for the average tip as x increases. On average, there is highest mean tip in Queen and we can see that tips on different types of rates in different area don't vary as much except for Brooklyn. Although we see a high increase in tips for high amount of passengers, there isn't much high amount of passengers (7, or 8) proportion to the whole data set. We also have decided to drop some variables like extra, toll amount, total amount, an drop off location, and pickup dow because I did not see a relationship with tip or other variables can cover it and we do not want complicated model.
+The tips only include for credit cards so we decided to remove payment type as there will be no interaction with tips and cash payment. The total payment includes the tip it can't be used to predict tip so total payment was removed.
+```{r}
+# Sampling data because it takes too much time and RAM
+
+set.seed(369)
+index = sample(1:nrow(week2.tidy), nrow(week2.tidy)*0.2)
+week2.sample = week2.tidy[index,]
+
+mf<-model.frame(tip_amount~., data=week2.sample)
+X<-model.matrix(tip_amount~., mf)[,-1]
+
+library(leaps)
+subsets1.reg = regsubsets(X, week2.sample$tip_amount, nvmax = 16, method = "backward")
+subsets1.summary = summary(subsets1.reg)
+apparentErrors = subsets1.summary$rss / (nrow(week2.sample) - 1:16)
+qplot(y = apparentErrors, x= 1:16)
+
+allyhat<-function(xtrain, ytrain, xtest,lambdas,nvmax){
+  n<-nrow(xtrain)
+  yhat<-matrix(nrow=nrow(xtest),ncol=length(lambdas))
+  search<-regsubsets(xtrain,ytrain, nvmax=nvmax, method="back")
+  summ<-summary(search)
+  for(i in 1:length(lambdas)){
+    penMSE<- n*log(summ$rss)+lambdas[i]*(1:nvmax)
+    best<-which.min(penMSE)  #lowest AIC
+    betahat<-coef(search, best) #coefficients
+    xinmodel<-cbind(1,xtest)[,summ$which[best,]] #predictors in that model
+    yhat[,i]<-xinmodel%*%betahat
+  }
+  yhat
+}
+
+y = week2.sample$tip_amount
+
+n<-nrow(X)
+folds<-sample(rep(1:10,length.out=n))
+lambdas<-c(2,4,6,8,10,12)
+fitted<-matrix(nrow=n,ncol=length(lambdas))
+for(k in 1:10){
+  train<- (1:n)[folds!=k]
+  test<-(1:n)[folds==k]
+  fitted[test,]<-allyhat(X[train,],y[train],X[test,],lambdas,nvmax = 16)
+}
+rbind(lambdas,colMeans((y-fitted)^2))
+colMeans((y-fitted)^2)
+```
+Due to limited computational resources (my Rstudio could not handle it and it crashed), I have decided to sample the data and fit a linear model without any interaction. Interaction was also not fitted because it required higher computational resources and there wasn't much difference in average tips for adding interaction like different locations and time or weekends vs weekdays as shown above. Using cost-complex strategy, we have fitted various lambdas and last four lambda give us the same result. The lambda of 2 will be used as we do not want to penalise the model if it gives the same result with higher penalties. Looks like AIC is good enough for this model.
+```{r}
+search<-regsubsets(X,y, nvmax=16, method="back")
+summ<-summary(search)
+penMSE<- nrow(X)*log(summ$rss)+2*(1:16)
+best<-which.min(penMSE) #lowest penalisedRSS
+betahat<-coef(search, best) #coefficients
+xinmodel<-cbind(1,X)[,summ$which[best,]]
+yhat2<-xinmodel%*%betahat
+betahat
+```
+
+```{r}
+week4.tidy = week4.df %>% 
+  filter(trip_distance >0) %>%
+  filter(RatecodeID <= 6) %>%
+  filter(fare_amount >0) %>%
+  filter(extra >=0) %>%
+  filter(mta_tax >=0) %>%
+  filter(tip_amount>=0) %>%
+  filter(improvement_surcharge>=0) %>%
+  filter(total_amount > 0) %>%
+  filter(passenger_count >0 & passenger_count <=4) %>%
+  filter(between(pickup_longitude, -75, -70)) %>%
+  filter(between(pickup_latitude, 40, 42)) %>%
+  mutate(time = case_when(hour(tpep_pickup_datetime) >= 0 & hour(tpep_pickup_datetime) <= 5 ~ "Early Morning",
+                          hour(tpep_pickup_datetime) >= 6 & hour(tpep_pickup_datetime) <= 11 ~ "Morning",
+                          hour(tpep_pickup_datetime) >= 12 & hour(tpep_pickup_datetime) <= 17 ~ "Afternoon",
+                          hour(tpep_pickup_datetime) >= 18 & hour(tpep_pickup_datetime) <= 23 ~ "Evening")) %>%
+  mutate(pickup_location = case_when(between(pickup_latitude, 40.7, 40.88) & between(pickup_longitude, -74, -73.91) ~ "Manhattan",
+                              between(pickup_latitude, 40.57, 40.7378) & between(pickup_longitude, -74.039, -73.858) ~ "Brooklyn",
+                              between(pickup_latitude, 40.63, 40.739) & between(pickup_longitude, -73.96, -73.7) ~ "Queen",
+                              TRUE~"Other")) %>%
+  mutate(dropoff_location = case_when(between(dropoff_latitude, 40.7, 40.88) & between(dropoff_longitude, -74, -73.91)~ "Manhattan",
+                              between(dropoff_latitude, 40.57, 40.7378) & between(dropoff_longitude, -74.039, -73.858) ~ "Brooklyn",
+                              between(dropoff_latitude, 40.63, 40.739) & between(dropoff_longitude, -73.96, -73.7) ~ "Queen",
+                              TRUE~"Other")) %>%
+  mutate(pickup_dow = factor(weekdays(tpep_pickup_datetime), levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))) %>%
+  mutate(payment_type = fct_recode(factor(payment_type), "Credit card" = "1", "cash" = "2", "No charge" = "3", "Dispute" = "4", "Unknown" = "5", "Voided trip" = "6")) %>%
+  mutate(RatecodeID = fct_recode(factor(RatecodeID), "Standard rate" = "1", "JFK" = "2", "Newark" = "3", "Nassau or Westchester" = "4", "Negotiated fare" = "5", "Group ride" = "6")) %>%
+  mutate(pickupday_type = case_when(pickup_dow %in% c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday") ~ "Working day",
+                             pickup_dow %in% c("Saturday", "Sunday") ~ "Weekend")) %>%
+  select(tip_amount, passenger_count, trip_distance, RatecodeID, payment_type, fare_amount, extra, tolls_amount, total_amount, time, pickup_location, dropoff_location, pickup_dow, pickupday_type)
+
+week4.tidy = week4.tidy %>%
+  select(-tolls_amount, -dropoff_location, -pickup_dow, -payment_type, -total_amount)
+```
+Week 4 data have been cleaned the same way as week 2 to remove any meaningless columns and outliers that do not make sense. The variables need to be consistent with week 2 training data to test the model with week 4 test data. 
+```{r}
+set.seed(369)
+index2 = sample(1:nrow(week4.tidy), nrow(week4.tidy)*0.2)
+week4.sample = week4.tidy[index2,]
+
+mf<-model.frame(tip_amount~., data=week4.sample)
+X2<-model.matrix(tip_amount~., mf)[,summ$which[best,]]
+
+fitted = X2 %*% betahat
+
+MSPEsample = sum((week4.sample$tip_amount - fitted)^2) / length(fitted)
+MSPEsample
+
+prediction.test = week4.sample %>%
+  filter(tip_amount == 1.72) %>%
+  select(-tip_amount) %>%
+  slice(1)
+
+prediction.test
+
+# Using the beta calculated,and a row of values with tip of 1.72
+prediction = as.numeric(betahat[1] + betahat[2] *prediction.test[1] + betahat[3] * prediction.test[2]  + prediction.test[4]*betahat[8] + betahat[12] + betahat[13] + betahat[16])
+prediction
+         
+apparent_error = sum((week2.sample$tip_amount - yhat2))/ (nrow(week2.sample) - length(betahat))
+apparent_error
+summary(week2.sample$tip_amount)
+```
+I have sampled 10% of the week 4 dataset due to limitation in computational power. Using the sample, I have calculated the MSPE of 2.29% and apparent error is almost nil. The MSPE drastically increased in comparison to the apparent error but it's not that bad. Although there is a huge range in the tip amount from week 2 sample, the MSPE is only 2.29%. This means that the model fitted using week 2 sample does a decent job in estimating for week 4 sample. This could have been better if the model had interaction terms; the model could have been fitted 2 way interaction and use the power of regsubsets to get the best model for predicting tips. However, due to constraint in computational resources a simple linear model was fitted. 
+
+To put in context, we have used a row of with a tip of 1.72 and used the beta we calculated and found out that the model calculated 1.806589. The model has predicted the mean tip within about 3% error which is a decent accuracy. 
+
+There was also a problem with specifying borough as locations had to be estimated using latitude and longitude and unless the location is square shaped, it had to be a rough estimation. It was also beyond of the course, so location had to be roughly estimated. 
+
+Face validity of the model: The whole point of the assignment was to construct a model that predicts the amount of a tip and we have. On the surface level, the model predicts the amount of tip but it only predicts tip that is paid by credit cards. From the plot where it shows proportion of the payment type depending on the day, we can clearly observe that on average there is 65% proportion on paying by credit card. This means that on average, 35% is neglected because it was never recorded in the dataset and that is a good amount of cash uses. Therefore, the model only predicts tips paid by credit cards and it misses out on the 35% of the cash tips so the model does not accurately predict the amount of tip. To conclude, the model does not predict properly on tips due to the missing data. 
+
+Given above information, the model's predictability has space for improvement and once the lock down is finished, I could use the school computer to try the 2 way interaction model and see how much MSPE have improved or worsened. However, for now we will leave it.
+
+
